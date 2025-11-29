@@ -1,0 +1,27 @@
+# ASR
+faster-whisper>=0.5.0
+
+# ML / GPU runtime
+# NOTE: See PyTorch official install instructions for CUDA-specific wheels. Example (do not include in requirements when building inside Dockerfile unless you know CUDA version):
+# pip install --index-url https://download.pytorch.org/whl/cu121 torch --extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+
+# Video
+ffmpeg-python>=0.2.0
+
+# Storage / S3-compatible
+minio>=7.1.5
+
+# Redis queue
+redis>=4.5.0
+
+# gRPC
+grpcio>=1.56.0
+protobuf>=4.23.0
+
+# Postgres client
+psycopg[binary]>=3.1
+
+# Utilities
+python-dotenv>=1.0.0
+uvloop>=0.20.0
