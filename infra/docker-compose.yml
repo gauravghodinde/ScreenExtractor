@@ -104,27 +104,24 @@ services:
       dockerfile: Dockerfile
     image: scene-seeker-worker:dev
     environment:
-      REDIS_ADDR: "redis:6379"
-      MINIO_ENDPOINT: "minio:9000"
-      MINIO_ACCESS_KEY: "minioadmin"
-      MINIO_SECRET_KEY: "minioadmin"
-      PG_HOST: "postgres"
-      PG_PORT: "5432"
-      PG_USER: "scene_user"
-      PG_PASS: "scene_pass"
-      PG_DB: "scene_seeker"
-      S3_BUCKET_UPLOADS: "scene-uploads"
-      S3_BUCKET_RESULTS: "scene-results"
-      WORKER_GRPC_PORT: "50051"
-      NVIDIA_VISIBLE_DEVICES: "all"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=scene_user
+      - PG_PASS=scene_pass
+      - PG_DB=scene_seeker
+      - S3_BUCKET_UPLOADS=scene-uploads
+      - S3_BUCKET_RESULTS=scene-results
+      - WORKER_GRPC_PORT=50051
     ports:
       - "50051:50051"
     depends_on:
       - redis
       - minio_init
       - postgres
-    gpus: all
     
     networks:
       - scene-net
