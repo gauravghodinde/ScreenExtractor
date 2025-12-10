@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -356,6 +357,200 @@ func main() {
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"id": jobID, "s3_path": fmt.Sprintf("s3://%s/%s", bucketUploads, objectName)})
+	})
+
+	// POST /clip/search - Find matching subtitle segment and create a clip job
+	// Uses the new MinIO-based vector search with job_id parameter
+	// Request JSON: { "query": "text to search", "job_id": "...", "top_k": 1, "padding": 2.0 }
+	r.POST("/clip/search", func(c *gin.Context) {
+		var body struct {
+			Query   string  `json:"query" binding:"required"`
+			JobID   string  `json:"job_id" binding:"required"`
+			TopK    int     `json:"top_k"`
+			Padding float64 `json:"padding"`
+		}
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: query and job_id are required"})
+			return
+		}
+		if body.TopK <= 0 {
+			body.TopK = 1
+		}
+
+		// Call worker search API with job_id parameter for MinIO-based search
+		reqPayload := map[string]interface{}{
+			"query":  body.Query,
+			"job_id": body.JobID,
+			"top_k":  body.TopK,
+		}
+		reqBytes, _ := json.Marshal(reqPayload)
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Post(workerSearch+"/search", "application/json", bytes.NewReader(reqBytes))
+		if err != nil {
+			log.Printf("failed to call worker search api: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "failed to contact worker search"})
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			log.Printf("worker search returned status %d: %s", resp.StatusCode, string(bodyBytes))
+			c.JSON(http.StatusBadGateway, gin.H{"error": "worker search error"})
+			return
+		}
+
+		var wRes struct {
+			Results []struct {
+				ID    interface{}            `json:"id"`
+				Text  string                 `json:"text"`
+				Meta  map[string]interface{} `json:"meta"`
+				Score float64                `json:"score"`
+			} `json:"results"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wRes); err != nil {
+			log.Printf("failed to decode worker search response: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "invalid worker response"})
+			return
+		}
+		if len(wRes.Results) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no matching segments found"})
+			return
+		}
+
+		// Extract timestamp from top result
+		// Helper function to parse timestamp strings in various formats
+		parseTimestamp := func(ts string) float64 {
+			// Try parsing HH:MM:SS.microseconds format first (e.g., "0:01:08.443000")
+			parts := strings.Split(ts, ":")
+			if len(parts) == 3 {
+				hours := 0
+				minutes := 0
+				seconds := 0.0
+
+				fmt.Sscanf(parts[0], "%d", &hours)
+				fmt.Sscanf(parts[1], "%d", &minutes)
+				fmt.Sscanf(parts[2], "%f", &seconds)
+
+				return float64(hours*3600+minutes*60) + seconds
+			}
+
+			// Try parsing simple float
+			if f, err := strconv.ParseFloat(ts, 64); err == nil {
+				return f
+			}
+
+			return 0.0
+		}
+
+		top := wRes.Results[0]
+		segStart := 0.0
+		segEnd := 0.0
+
+		if v, ok := top.Meta["start"]; ok {
+			switch t := v.(type) {
+			case float64:
+				segStart = t
+			case float32:
+				segStart = float64(t)
+			case string:
+				segStart = parseTimestamp(t)
+			}
+		}
+		if v, ok := top.Meta["end"]; ok {
+			switch t := v.(type) {
+			case float64:
+				segEnd = t
+			case float32:
+				segEnd = float64(t)
+			case string:
+				segEnd = parseTimestamp(t)
+			}
+		}
+
+		// Apply padding
+		padding := body.Padding
+		if padding < 0 {
+			padding = 0
+		}
+		clipStart := segStart - padding
+		if clipStart < 0 {
+			clipStart = 0
+		}
+		clipEnd := segEnd + padding
+
+		// Get the video_path from the job database
+		ctxPg, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		// Try to get video_path from details, fallback to result if available
+		var videoPath string
+		var videoPaths3 sql.NullString
+		var resultPath sql.NullString
+
+		err2 := pgpool.QueryRow(ctxPg, "SELECT COALESCE(details->>'video_path', '') as vp, COALESCE(details->>'result', '') as rp FROM jobs WHERE id=$1", body.JobID).Scan(&videoPaths3, &resultPath)
+		if err2 != nil {
+			log.Printf("failed to fetch original job video_path: %v", err2)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "original job not found"})
+			return
+		}
+
+		// Use video_path if present, otherwise try to extract from result
+		if videoPaths3.Valid && videoPaths3.String != "" {
+			videoPath = videoPaths3.String
+		} else if resultPath.Valid && resultPath.String != "" {
+			// result is in format "srt://bucket/key" or "s3://bucket/key"
+			result := resultPath.String
+			if strings.HasPrefix(result, "srt://") {
+				// Extract the S3 path from srt:// format
+				videoPath = "s3://" + strings.TrimPrefix(result, "srt://")
+			} else if strings.HasPrefix(result, "s3://") {
+				videoPath = result
+			}
+		}
+
+		if videoPath == "" {
+			log.Printf("job %s has no video_path in details or result", body.JobID)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "job has no video_path"})
+			return
+		}
+
+		// Create a new clip job
+		clipJobID := uuid.New().String()
+		clipDetails := map[string]interface{}{
+			"video_path": videoPath,
+			"start":      clipStart,
+			"end":        clipEnd,
+			"query":      body.Query,
+			"source_job": body.JobID,
+		}
+		clipDetailsBytes, _ := json.Marshal(clipDetails)
+		if _, err := pgpool.Exec(ctxPg, "INSERT INTO jobs (id, status, details) VALUES ($1, $2, $3)", clipJobID, "queued", clipDetailsBytes); err != nil {
+			log.Printf("failed to insert clip job: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create clip job"})
+			return
+		}
+
+		// Enqueue clip job into redis scene_jobs queue
+		clipMsg := map[string]interface{}{
+			"id":         clipJobID,
+			"video_path": videoPath,
+			"start":      clipStart,
+			"end":        clipEnd,
+		}
+		clipMsgBytes, _ := json.Marshal(clipMsg)
+		if err := rdb.LPush(ctx, "scene_jobs", clipMsgBytes).Err(); err != nil {
+			log.Printf("failed to enqueue clip job: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue clip job"})
+			return
+		}
+
+		c.JSON(http.StatusAccepted, gin.H{
+			"clip_job_id": clipJobID,
+			"clip_start":  clipStart,
+			"clip_end":    clipEnd,
+			"source_job":  body.JobID,
+			"query":       body.Query,
+		})
 	})
 
 	// Query text -> find matching subtitle segment via worker's Chroma search,

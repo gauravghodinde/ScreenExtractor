@@ -8,6 +8,25 @@ This repository contains two services for the Scene Extractor project:
 
 Quick start (development):
 
+ size=$(stat -c%s video.mkv)
+curl -i -X POST "http://localhost:8080/upload" \
+  -H "Content-Length: $size" \
+  -H "X-Filename: video.mkv" \
+  --data-binary @video.mkv
+
+curl -X POST http://localhost:50052/search -H "Content-Type: application/json" -d '{"query": "calm and peaceful", "job_id": "e3a95c2f-8466-4118-be50-c25cdf8d074f", "top_k": 5}' | python -m json.tool
+
+curl -X POST http://localhost:50052/clip -H "Content-Type: application/json" -d '{
+  "query": "i need a million dollors",
+  "video_path": "s3://scene-uploads/d92b1983-a12c-4238-a2dc-ea7600d11078.mkv",
+  "job_id": "cb6ea4a3-bdf2-4375-bad0-2662bbb58a22",
+  "top_k": 1,
+  "padding": 2.0
+}'
+
+curl -s -X POST http://localhost:8080/clip/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "calm and peaceful", "job_id": "01583a32-1ada-4e26-a6cb-a8dbfe5900f2", "padding": 1.0}'
 1. Copy environment file
 
 ```bash

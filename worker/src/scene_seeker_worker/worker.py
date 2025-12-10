@@ -212,22 +212,10 @@ def process_job(job: Dict[str, Any], r: redis.Redis, minio_client: Minio, pg_con
             update_job_status_pg(pg_conn, job_id, "uploading")
             upload_to_minio(minio_client, BUCKET_RESULTS, result_name, local_out)
 
-            # attempt to extract subtitles and index them (if present)
-            try:
-                local_srt = os.path.join(td, f"{job_id}.srt")
-                extract_subtitles(local_in, local_srt)
-                # upload transcript and index into Chroma
-                upload_to_minio(minio_client, BUCKET_RESULTS, f"{job_id}.srt", local_srt, content_type="text/srt")
-                # attempt to index subtitles into Chroma for semantic search
-                try:
-                    idx_summary = index_subtitles_to_chroma(local_srt, job_id)
-                    logger.info('indexing summary: %s', idx_summary)
-                except Exception as e:
-                    logger.warning('indexing subtitles to chroma failed: %s', e)
-            except Exception as e:
-                logger.warning("subtitle extraction/indexing skipped or failed: %s", e)
-
-            update_job_status_pg(pg_conn, job_id, "completed", {'result': f'srt://{bucket}/{object_name}', 'index': idx_summary if 'idx_summary' in locals() else None})
+            # Skip subtitle extraction for clip jobs (clips are short segments)
+            # Subtitle extraction and indexing only happens for full transcription jobs
+            
+            update_job_status_pg(pg_conn, job_id, "completed", {'result': f's3://{BUCKET_RESULTS}/{result_name}'})
             logger.info('transcription job %s completed', job_id)
         except Exception as e:
             logger.exception("job %s failed: %s", job_id, e)
