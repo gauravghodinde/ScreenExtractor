@@ -20,7 +20,10 @@ COPY src ./src
 WORKDIR /app/src
 
 EXPOSE 50051
+EXPOSE 50052
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python3", "-m", "scene_seeker_worker.worker"]
+# Run the worker loop and the HTTP search API (uvicorn) in the same container.
+# We use a shell command to start both processes; uvicorn will serve on 50052.
+CMD ["sh", "-c", "python3 -m scene_seeker_worker.worker & uvicorn scene_seeker_worker.search_api:app --host 0.0.0.0 --port 50052"]

@@ -119,19 +119,51 @@ services:
       - WORKER_GRPC_PORT=50051
     ports:
       - "50051:50051"
+      - "50052:50052"
     depends_on:
       - redis
       - minio_init
       - postgres
+    volumes:
+      - chroma_data:/data/chroma
     
     networks:
       - scene-net
     restart: unless-stopped
 
+  api:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    image: scene-seeker-api:dev
+    environment:
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=scene_user
+      - PG_PASS=scene_pass
+      - PG_DB=scene_seeker
+      - S3_BUCKET_UPLOADS=scene-uploads
+      - S3_BUCKET_RESULTS=scene-results
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - minio_init
+      - postgres
+    networks:
+      - scene-net
+    restart: unless-stopped
+    command: ["uvicorn", "scene_seeker_worker.search_api:app", "--host", "0.0.0.0", "--port", "8000"]
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  chroma_data:
 
 networks:
   scene-net:
