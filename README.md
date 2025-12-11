@@ -1,231 +1,93 @@
-# scenextractor
+# SceneExtractor 🎬
 
-This repository contains two services for the Scene Extractor project:
+A distributed video search engine that lets you find the exact moment you're looking for.
 
-- `go/` - Orchestrator (Gin, Postgres, MinIO, Redis)
-- `worker/` - Python GPU worker (faster-whisper, ffmpeg-python)
-- `infra/` - Docker Compose and environment examples
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Status](https://img.shields.io/badge/status-dev-orange)
 
-Quick start (development):
+## 💡 The Idea
 
- size=$(stat -c%s video.mkv)
-curl -i -X POST "http://localhost:8080/upload" \
-  -H "Content-Length: $size" \
-  -H "X-Filename: video.mkv" \
+Imagine having a "Google Search" for your personal video collection. Instead of scrubbing through hours of footage to find that one specific quote or scene, **SceneExtractor** lets you type a natural language query (e.g., *"I need a million dollars"*) and instantly retrieves the exact video clip frame where that dialogue occurs.
+
+It treats video dialogue as searchable data, indexing content semantically so you can find scenes even if you don't remember the exact words.
+
+## 🚀 Key Features
+
+-   **Semantic Search:** Find scenes by meaning, not just keyword matching.
+-   **Frame-Perfect Retrieval:** Returns the exact video clip corresponding to the dialogue.
+-   **Distributed Architecture:** Built for scalability with separate microservices for orchestration and processing.
+-   **Modern UI:** Clean, responsive web interface for uploading and searching.
+
+## 🛠️ Technology Stack
+
+SceneExtractor is built as a set of distributed microservices:
+
+### **Backend (The Brain)**
+-   **Go (Golang):** High-performance Orchestrator service using the **Gin** framework.
+-   **Redis:** Manages job queues (`scene_jobs`, `queue:transcription`).
+-   **PostgreSQL:** Persists job metadata and status.
+
+### **Worker (The Muscle)**
+-   **Python:** Handles heavy lifting for media processing and AI.
+-   **FFmpeg:** Extracts subtitles and generates video clips.
+-   **Sentence-Transformers:** Generates vector embeddings for dialogue.
+-   **NumPy:** Performs efficient cosine similarity vector search.
+
+### **Storage**
+-   **MinIO:** S3-compatible object storage for videos and index files.
+
+### **Frontend**
+-   **Next.js (React):** A fast, modern web interface.
+-   **TailwindCSS:** For beautiful, responsive styling.
+
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    User[Web Frontend] -->|Upload/Search| Orch[Go Orchestrator]
+    Orch -->|Enqueue Job| Redis
+    Orch -->|Store Meta| Postgres
+    Redis -->|Push Job| Worker[Python Worker]
+    Worker -->|Fetch/Store Media| MinIO
+    Worker -->|Extract/Clip| FFmpeg
+    Worker -->|Vector Indexing| Local/MinIO
+```
+
+## ⚡ Quick Start
+
+The entire system is containerized. You can spin it up with a single command.
+
+### Prerequisites
+-   Docker & Docker Compose
+
+### Run Local
+1.  **Clone the repo**
+    ```bash
+    git clone https://github.com/yourusername/scenextractor.git
+    cd scenextractor
+    ```
+
+2.  **Start Services**
+    ```bash
+    cd infra
+    docker-compose up -d --build
+    ```
+
+3.  **Access the App**
+    Open [http://localhost:3000](http://localhost:3000) to upload videos and start searching!
+
+## 📝 API Usage (Dev)
+
+You can also interact directly with the API:
+
+```bash
+# Upload a video
+curl -X POST http://localhost:8080/upload \
+  -H "Content-Length: $(stat -c%s video.mkv)" \
   --data-binary @video.mkv
 
-curl -X POST http://localhost:50052/search -H "Content-Type: application/json" -d '{"query": "calm and peaceful", "job_id": "e3a95c2f-8466-4118-be50-c25cdf8d074f", "top_k": 5}' | python -m json.tool
-
-curl -X POST http://localhost:50052/clip -H "Content-Type: application/json" -d '{
-  "query": "i need a million dollors",
-  "video_path": "s3://scene-uploads/d92b1983-a12c-4238-a2dc-ea7600d11078.mkv",
-  "job_id": "cb6ea4a3-bdf2-4375-bad0-2662bbb58a22",
-  "top_k": 1,
-  "padding": 2.0
-}'
-
-curl -s -X POST http://localhost:8080/clip/search \
+# Search for a clip
+curl -X POST http://localhost:8080/query_clip \
   -H "Content-Type: application/json" \
-  -d '{"query": "calm and peaceful", "job_id": "01583a32-1ada-4e26-a6cb-a8dbfe5900f2", "padding": 1.0}'
-1. Copy environment file
-
-```bash
-cp infra/.env.example infra/.env
-# Orchestrator API
-
-This document describes the HTTP routes exposed by the Orchestrator service implemented in `go/cmd/orchestrator/main.go`. It lists each endpoint, expected request format, responses, important environment variables, Redis queue names, and usage examples.
-
-**Note:** This project expects Redis, Postgres, MinIO (S3-compatible storage), and the Worker service to be available (see `infra/docker-compose.yml`).
-
-**Environment variables**
-- `PORT` : port for the orchestrator (default `8080`).
-- `REDIS_ADDR` : Redis address (default `redis:6379`).
-- `PG_HOST` : Postgres host (default `postgres`).
-- `PG_PORT` : Postgres port (default `5432`).
-- `PG_USER` : Postgres user (default `scene_user`).
-- `PG_PASS` : Postgres password (default `scene_pass`).
-- `PG_DB`   : Postgres database (default `scene_seeker`).
-- `MINIO_ENDPOINT` : MinIO endpoint (default `minio:9000`). Can include scheme `http://host:9000`.
-- `MINIO_ACCESS_KEY` : MinIO access key.
-- `MINIO_SECRET_KEY` : MinIO secret key.
-- `BUCKET_UPLOADS` : bucket for uploads (default `scene-uploads`).
-- `WORKER_SEARCH_ADDR` : URL of worker's search API (default `http://worker:50052`).
-
-Redis queue names used by the orchestrator
-- `scene_jobs` : main job queue for scene extraction jobs.
-- `queue:transcription` : queue for uploaded videos that require transcription.
-
-Postgres schema expectations
-- The orchestrator writes to a `jobs` table. Expected columns (based on usage):
-	- `id` (string/UUID)
-	- `status` (string), e.g. `queued`, `pending`, `done`.
-	- `details` (JSON) containing metadata such as `video_path`, `start`, `end`, `result` (S3 path), etc.
-	- `created_at` (timestamp) is used when listing jobs.
-
-Routes
-
-- `GET /healthz`
-	- Simple health check. Returns `200` with body `{ "status": "ok" }`.
-
-- `POST /search`
-	- Proxies the JSON body to the worker search API (`WORKER_SEARCH_ADDR + /search`).
-	- Request: any JSON accepted by the worker search API (commonly `{ "query": "...", "top_k": N }`).
-	- Response: returned verbatim from the worker (status code and body).
-
-	Example:
-	```bash
-	curl -X POST http://localhost:8080/search \
-		-H "Content-Type: application/json" \
-		-d '{"query":"hello world","top_k":5}'
-	```
-
-- `POST /jobs`
-	- Create a plain job entry and enqueue it into `scene_jobs`.
-	- Required JSON field: `video_path` (string)
-	- Optional fields: `start` (float), `end` (float), `query` (string)
-	- On success: returns `201 Created` and JSON `{ "id": "<job-id>" }`.
-
-	Example:
-	```bash
-	curl -X POST http://localhost:8080/jobs \
-		-H "Content-Type: application/json" \
-		-d '{"video_path":"s3://scene-uploads/myvideo.mp4","start":10,"end":40,"query":"car chase"}'
-	```
-
-	Notes:
-	- If JSON parsing fails, the handler attempts to parse form-encoded data and then a simple `key:value` fallback.
-	- The job gets inserted into Postgres (`jobs` table) and the message is pushed to Redis `scene_jobs` (LPUSH).
-
-- `POST /upload`
-	- Stream-upload a video to MinIO and create an associated job for transcription.
-	- Required header: `Content-Length` (the handler streams directly to MinIO without buffering when Content-Length is present).
-	- Optional header: `X-Filename` to preserve filename extension (or `?filename=` query param).
-	- Returns `201 Created` and JSON `{ "id": "<job-id>", "s3_path": "s3://bucket/object" }`.
-
-	Example (uploading a local file):
-	```bash
-	FILE=./sample.mp4
-	SIZE=$(stat -c%s "$FILE")
-	curl -X POST http://localhost:8080/upload \
-		-H "Content-Length: $SIZE" \
-		-H "X-Filename: sample.mp4" \
-		--data-binary "@$FILE"
-	```
-
-	Behavior:
-	- The file is uploaded to `BUCKET_UPLOADS` in MinIO with a generated UUID object name (keeps extension if provided).
-	- A `jobs` row is inserted with `status` set to `pending` and the job is pushed to `queue:transcription` in Redis.
-
-- `POST /query_clip`
-	- Use the Worker vector search (Chroma-backed) to find a matching subtitle segment, then create a clip-extraction job centered on that segment.
-	- Request JSON:
-		- `query` (string, required)
-		- `top_k` (int, optional, default `5`)
-		- `clip_duration` (float seconds, optional, default `20`)
-	- On success: returns `202 Accepted` with `{ "job_id": "<new-id>", "clip_start": <start>, "clip_end": <end>, "source_job": "<matched-job-id>" }`.
-
-	Example:
-	```bash
-	curl -X POST http://localhost:8080/query_clip \
-		-H "Content-Type: application/json" \
-		-d '{"query":"I love this song","top_k":3,"clip_duration":15}'
-	```
-
-	Behavior:
-	- The orchestrator calls the worker `/search` endpoint with `{"query": body.Query, "top_k": body.TopK}`.
-	- It expects hits with metadata keys `job_id`, `start`, `end`.
-	- If a hit is found, the orchestrator looks up the `video_path` of the matched job, computes a clip window around the segment midpoint, inserts a new `jobs` row (status `queued`), and pushes a job message to `scene_jobs`.
-
-- `POST /query_clip_fallback`
-	- A lightweight fallback that searches SRT subtitle files stored in MinIO (`scene-results` bucket) for a substring match and creates a clip job from the first matching segment.
-	- Request JSON:
-		- `query` (string, required)
-		- `clip_duration` (float seconds, optional, default `20`)
-		- `limit_srts` (int, optional, default `50`) — how many SRT files to scan
-	- On success: returns `202 Accepted` similar to `/query_clip`.
-
-	Example:
-	```bash
-	curl -X POST http://localhost:8080/query_clip_fallback \
-		-H "Content-Type: application/json" \
-		-d '{"query":"hello there","clip_duration":20}'
-	```
-
-	Behavior:
-	- Lists objects in `scene-results` bucket, filters `.srt` files, and scans them for a case-insensitive substring.
-	- Parses SRT time lines (HH:MM:SS,mmm) to compute segment start/end.
-	- Creates and enqueues a clip-extraction job similar to `/query_clip`.
-
-- `GET /jobs`
-	- List jobs with pagination and optional status filter.
-	- Query parameters:
-		- `limit` (int, default `20`, max `100`)
-		- `offset` (int, default `0`)
-		- `status` (optional string to filter by job status)
-	- Returns `200 OK` with JSON `{ "jobs": [ { "id":..., "status":..., "result":..., "created_at":... }, ... ] }`.
-
-	Example:
-	```bash
-	curl "http://localhost:8080/jobs?limit=10&offset=0&status=done"
-	```
-
-- `GET /jobs/:id/result`
-	- Return the job's `details->>'result'` S3 path (expected `s3://bucket/key`) streamed through the orchestrator to the client as an attachment.
-	- If `result` is missing or job not found, returns `404`.
-	- Streams object content with `Content-Type`, `Content-Length`, and `Content-Disposition: attachment; filename="<key>"`.
-
-	Example:
-	```bash
-	curl -L -o output.mp4 http://localhost:8080/jobs/<job-id>/result
-	```
-
-Errors and status codes (high-level)
-- `200 OK`: Successful GET/list operations.
-- `201 Created`: Resource created (`/jobs`, `/upload`).
-- `202 Accepted`: Job queued for processing (`/query_clip`, `/query_clip_fallback`).
-- `400 Bad Request`: Invalid/malformed input.
-- `404 Not Found`: Resource not found (no search hits or missing job/result).
-- `502 Bad Gateway`: Failed to contact worker search API or other upstream service.
-- `500 Internal Server Error`: Unexpected server/database/storage error.
-
-Payload examples (job message that is pushed to Redis `scene_jobs`)
-```json
-{
-	"id": "<job-uuid>",
-	"video_path": "s3://scene-uploads/<object>",
-	"start": 10.0,
-	"end": 30.0,
-	"query": "car chase"
-}
+  -d '{"query": "hello world", "clip_duration": 15}'
 ```
-
-Worker interaction
-- The orchestrator expects the Worker search API to be reachable at `WORKER_SEARCH_ADDR` and to expose a `/search` endpoint that returns JSON with a structure like:
-```json
-{
-	"results": [
-		{ "id": "<seg-id>", "text": "...", "meta": { "job_id": "<job-id>", "start": 12.0, "end": 14.0 }, "distance": 0.123 }
-	]
-}
-```
-
-Quick local run (using `infra/docker-compose.yml`)
-- Ensure `.env` or your environment contains Postgres, Redis, MinIO credentials.
-- Start services:
-```bash
-cd infra
-docker-compose up -d
-```
-- Build/run the orchestrator service (in this repo the orchestrator service is prepared under `go/` — the compose file may already include it).
-
-Notes and troubleshooting
-- If `/upload` fails with MinIO errors, check `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and that the bucket `BUCKET_UPLOADS` exists.
-- If `/search` calls fail, verify `WORKER_SEARCH_ADDR` and that the Worker container is up.
-- For debugging, the orchestrator logs the raw `/jobs` request body and the Redis queue head (up to 5 entries) after enqueuing.
-
-If you want, I can also:
-- Add example Postgres `jobs` table migration (SQL) if missing.
-- Add a short `examples/` folder with sample `curl` scripts for automated testing.
-
----
-File: `go/cmd/orchestrator/main.go` (routes documented above)

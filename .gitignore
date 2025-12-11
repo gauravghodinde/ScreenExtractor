@@ -1,0 +1,64 @@
+# General
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+tmp/
+temp/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.test
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.spec
+
+# Go
+/go/bin/
+/go/dist/
+*.exe
+*.dll
+*.so
+*.test
+vendor/
+
+# Node / Frontend
+node_modules/
+.next/
+npm-debug.log*
+yarn-debug.log*
+
+# Infrastructure Data (if bind mounted)
+infra/postgres-data/
+infra/minio-data/
+infra/redis-data/
+infra/chroma-data/
+
+# Media / Heavy Assets
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.webm
+*.iso
+
+# Generated Search Index & Subtitles
+*.pkl
+*.index
+*.chroma
+*.srt

@@ -43,6 +43,20 @@ class VectorSearchEngine:
         """
         self.texts = texts
         self.embeddings = self.encode_texts(texts)
+
+    def append(self, texts: List[str]):
+        """Append new texts to an existing index without recomputing old embeddings."""
+        new_embeddings = self.encode_texts(texts)
+
+        if self.embeddings is None or self.texts is None:
+            # If no existing index, behave like index()
+            self.texts = texts
+            self.embeddings = new_embeddings
+            return
+
+        # Concatenate embeddings and texts to extend the index
+        self.embeddings = np.vstack([self.embeddings, new_embeddings])
+        self.texts = list(self.texts) + list(texts)
     
     def search(self, query: str, top_k: int = 5) -> List[Tuple[int, float]]:
         """

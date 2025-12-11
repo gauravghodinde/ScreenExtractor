@@ -113,60 +113,6 @@ def extract_subtitles(input_path: str, out_srt_path: str) -> None:
         raise
 
 
-def index_subtitles_to_chroma(srt_path: str, job_id: str, persist_dir: str = "/data/chroma") -> Dict[str, Any]:
-    """Parse an SRT file, embed each subtitle entry, and upsert into a Chroma collection.
-
-    Returns a summary dict with collection name and number of items indexed.
-    """
-    logger.info("indexing subtitles %s for job %s", srt_path, job_id)
-
-    with open(srt_path, 'r', encoding='utf-8', errors='ignore') as fh:
-        srt_content = fh.read()
-
-    subs = list(srt.parse(srt_content))
-    if not subs:
-        logger.info("no subtitles found in %s", srt_path)
-        return {"count": 0}
-
-    texts = []
-    metadatas = []
-    ids = []
-    for i, entry in enumerate(subs):
-        txt = entry.content.replace('\n', ' ').strip()
-        start = entry.start.total_seconds()
-        end = entry.end.total_seconds()
-        ids.append(f"{job_id}-{i}")
-        texts.append(txt)
-        metadatas.append({"job_id": job_id, "start": start, "end": end})
-
-    # create embedder and chroma client
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(texts, convert_to_numpy=True)
-
-    # create chroma client with compatibility helper
-    def _get_client():
-        try:
-            return chromadb.Client()
-        except Exception:
-            return chromadb.Client(Settings(chroma_db_impl="duckdb+parquet", persist_directory=persist_dir))
-
-    client = _get_client()
-    col_name = "scene_segments"
-    try:
-        collection = client.get_collection(name=col_name)
-    except Exception:
-        collection = client.create_collection(name=col_name)
-
-    # Convert embeddings to list of lists if numpy array
-    emb_list = [e.tolist() for e in embeddings]
-
-    collection.add(ids=ids, documents=texts, metadatas=metadatas, embeddings=emb_list)
-    client.persist()
-
-    logger.info("indexed %d subtitle segments into collection %s", len(ids), col_name)
-    return {"collection": col_name, "count": len(ids)}
-
-
 def update_job_status_pg(conn, job_id: str, status: str, details: Dict[str, Any] = None) -> None:
     # Minimal updater — assumes a jobs table exists with (id text primary key, status text, details jsonb)
     logger.info("updating job %s status=%s", job_id, status)
@@ -212,9 +158,6 @@ def process_job(job: Dict[str, Any], r: redis.Redis, minio_client: Minio, pg_con
             update_job_status_pg(pg_conn, job_id, "uploading")
             upload_to_minio(minio_client, BUCKET_RESULTS, result_name, local_out)
 
-            # Skip subtitle extraction for clip jobs (clips are short segments)
-            # Subtitle extraction and indexing only happens for full transcription jobs
-            
             update_job_status_pg(pg_conn, job_id, "completed", {'result': f's3://{BUCKET_RESULTS}/{result_name}'})
             logger.info('transcription job %s completed', job_id)
         except Exception as e:
@@ -302,30 +245,6 @@ def main():
                         update_job_status_pg(pg_conn, job_id, 'completed', {'result': 'no_subtitles'})
                         return
 
-                # parse srt and insert into transcripts table
-                logger.info('parsing srt file at %s', local_srt)
-                with open(local_srt, 'r', encoding='utf-8', errors='ignore') as fh:
-                    srt_content = fh.read()
-                logger.info('srt content length: %d bytes', len(srt_content))
-                subs = list(srt.parse(srt_content))
-                logger.info('parsed %d subtitle entries', len(subs))
-                if not subs:
-                    logger.info('no subtitle entries for %s', job_id)
-                    update_job_status_pg(pg_conn, job_id, 'completed', {'result': 'no_subtitles'})
-                    return
-
-                with pg_conn.cursor() as cur:
-                    for i, entry in enumerate(subs):
-                        seg_id = str(uuid.uuid4())
-                        text = entry.content.replace('\n', ' ').strip()
-                        start = entry.start.total_seconds()
-                        end = entry.end.total_seconds()
-                        cur.execute(
-                            "INSERT INTO transcripts (id, video_id, start_time, end_time, text, embedding) VALUES (%s,%s,%s,%s,%s,%s)",
-                            (seg_id, job_id, start, end, text, None),
-                        )
-                    pg_conn.commit()
-
                 try:
                     upload_to_minio(minio_client, BUCKET_RESULTS, f"{job_id}.srt", local_srt, content_type='text/srt')
                 except Exception as e:
@@ -334,12 +253,12 @@ def main():
                 # Index the SRT and upload pickles to MinIO
                 logger.info('about to index srt for job %s at %s', job_id, local_srt)
                 try:
-                    idx_local = os.path.join(td, f"{job_id}.pkl")
-                    meta_local = os.path.join(td, f"{job_id}_metadata.pkl")
+                    idx_local = os.path.join(td, "index.pkl")
+                    meta_local = os.path.join(td, "metadata.pkl")
                     logger.info('calling index_srt_file for job %s', job_id)
                     index_srt_file(local_srt, index_file=idx_local, metadata_file=meta_local,
                                    minio_client=minio_client, minio_bucket=BUCKET_RESULTS,
-                                   index_object_name=f"{job_id}.pkl", metadata_object_name=f"{job_id}_metadata.pkl")
+                                   index_object_name="index.pkl", metadata_object_name="metadata.pkl", job_id=job_id)
                     logger.info('indexed SRT and uploaded pickles for transcription job %s', job_id)
                 except Exception as e:
                     logger.exception('failed to index srt or upload pickles for transcription job %s: %s', job_id, e)

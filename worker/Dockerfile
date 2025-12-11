@@ -12,8 +12,13 @@ WORKDIR /app
 
 # Copy requirements first for caching
 COPY requirements.txt ./
-RUN pip install --upgrade pip setuptools wheel && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel && \
     pip install -r requirements.txt
+
+# Pre-download the sentence-transformers model during build (cached separately)
+RUN --mount=type=cache,target=/root/.cache/huggingface \
+    python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Copy source
 COPY src ./src

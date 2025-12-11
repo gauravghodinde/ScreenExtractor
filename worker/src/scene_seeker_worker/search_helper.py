@@ -6,7 +6,9 @@ import pickle
 import tempfile
 from typing import List, Tuple, Dict, Optional
 from .vector_search import VectorSearchEngine
-
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("worker")
 
 def search_subtitles(query: str, index_file: str = "subtitle_index.pkl", 
                      metadata_file: str = "subtitle_metadata.pkl",
@@ -83,11 +85,11 @@ def search_subtitles(query: str, index_file: str = "subtitle_index.pkl",
     
     # Perform search
     results = search_engine.search(query, top_k)
-    
     # Format results
     output = []
     for idx, score in results:
         entry = entries[idx]
+        logger.info(f'about to index srt for job {job_id}: {entry.jobid}')
         output.append({
             'start': entry.start,
             'end': entry.end,
