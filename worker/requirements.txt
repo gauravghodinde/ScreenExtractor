@@ -27,3 +27,4 @@ srt>=0.7.6
 numpy>=1.26.0
 fastapi>=0.95.0
 uvicorn>=0.22.0
+

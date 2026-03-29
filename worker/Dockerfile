@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Basic deps and ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg git gcc libpq-dev && \
+    ffmpeg libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

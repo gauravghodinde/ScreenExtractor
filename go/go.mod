@@ -19,7 +19,7 @@ require (
 	github.com/rs/xid v1.2.1 // indirect
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	golang.org/x/sync v0.13.0 // indirect
-	gopkg.in/ini.v1 v1.57.0 // indirect
+	gopkg.in/ini.v1 v1.67.1 // indirect
 )
 
 require (
@@ -52,10 +52,10 @@ require (
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/joho/godotenv v1.5.1
 	github.com/minio/minio-go/v7 v7.0.29
 )
 
 // Workaround: goconvey's test dependencies reference github.com/smartystreets/assertions
 // but that module declares its path as github.com/smarty/assertions; add a replace
 // so `go mod tidy` resolves the correct module path.
-replace github.com/smartystreets/assertions => github.com/smarty/assertions v1.16.0
